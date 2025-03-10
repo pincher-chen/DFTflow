@@ -11,4 +11,4 @@ if you need to continue to calculate the cancelled or errored job:
 ```
 python vasp.py crun --cdir ${calculation directory} 
 ```
-5. Use python vasp.py --help to view other details.
+4. Use python vasp.py --help to view other details.
