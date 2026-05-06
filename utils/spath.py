@@ -38,6 +38,9 @@ class SPath(type(pathlib.Path())):
     def copy_to(self, des, mv_org=False):
         if not isinstance(des, SPath):
             des = SPath(des)
+        if not self.is_file or self.is_empty():
+            with open(f"{self.parent}"+"/error",'a') as f:
+                pass
         assert self.is_file() and not self.is_empty()
         if des.is_dir():
             if not mv_org:

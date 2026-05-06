@@ -191,6 +191,7 @@ class POSCAR:
     @classmethod
     def from_file(cls, filepath: SPath, **kwargs):
         file = filepath.readline_text(**kwargs)
+        #print(filepath)
         title = next(file)
         scale = smart_fmt(next(file))
         latt = []

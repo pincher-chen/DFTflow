@@ -46,6 +46,7 @@ def get_output(unix_cmd):
 
 
 def smart_fmt(inputs):
+    print(inputs)
     if isinstance(inputs, str):
         if inputs.isalpha():
             return inputs

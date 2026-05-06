@@ -71,7 +71,7 @@ def flush():
 @vasp.command()
 @click.option("--sec", help="sec limit", default=0)
 @click.option("--mins", help="mins limit", default=0)
-@click.option("--hour", help="hour limit", default=24)
+@click.option("--hour", help="hour limit", default=0)
 @click.option("--day", help="day limit", default=0)
 def limit(day, hour, mins, sec):
     th_time = TianHeTime(day, hour, mins, sec)
@@ -116,7 +116,6 @@ def run(stru_dir, pat, process=4, qsize=20, stime=0.5, ftime=60):
     producer.start()
     submitter.start()
 
-
 @vasp.command()
 @click.option("--cdir", help="calculation dir")
 def crun(cdir, process=4, qsize=20, stime=0.5, ftime=60):
@@ -134,23 +133,45 @@ def crun(cdir, process=4, qsize=20, stime=0.5, ftime=60):
     submitter.start()
 
 @vasp.command()
-@click.option("--des", help="des dir")
-@click.option("--src", help="src dir")
-def finished(src, des):
-    src, des = SPath(src), SPath(des).absolute()
-    if not des.exists():
-        des.mkdir()
-    for stru in src.walk(is_file=False):
-        try:
-            result = RunningRoot(stru).successed()
-        except FileNotFoundError:
-            continue 
-        else:
-            if result:
-                print(stru)
-                stru.move_to(des)
-    
-    
+@click.argument("stru_path")
+@click.argument("work_dir")
+@click.option("-t", "--template", required=True,
+              help="INCAR 模板名（对应 config/template/<name>.yaml，如 Scf-Soc）")
+@click.option("-k", "--kval", default=0.02, show_default=True,
+              help="K 点间距（Å⁻¹）")
+@click.option("-spin", "--spin", default="1", show_default=True,
+              type=click.Choice(["1", "2", "soc"]),
+              help="自旋设置：1=非磁, 2=共线自旋, soc=非共线 SOC (LSORBIT+LNONCOLLINEAR)")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="只生成输入文件和脚本，不打印提交提示")
+def single(stru_path, work_dir, template, kval, spin, dry_run):
+    """单步计算模式 - 不使用 workflow，只执行一个 step。
+
+    批量读取 STRU_PATH 目录中的 CIF/mcif 文件，为每个结构在 WORK_DIR 下
+    创建独立作业目录，生成 POSCAR / INCAR / KPOINTS / POTCAR 及提交脚本。
+
+    示例：
+
+    \b
+      # 非共线 SOC，k 间距 0.02
+      python vasp.py single cif_success/ mag_soc_vasp/ -t Scf-Soc -k 0.02 -spin soc
+
+    \b
+      # 共线自旋，k 间距 0.03
+      python vasp.py single InputPoscar/ work_out/ -t Scf -k 0.03 -spin 2
+    """
+    from calculation.vasp.single_generator import VaspSingleGenerator
+    # 统一转为内部整数表示：1/2/soc→1/2/4
+    _spin_map = {"1": 1, "2": 2, "soc": 4}
+    gen = VaspSingleGenerator(
+        stru_path=stru_path,
+        work_dir=work_dir,
+        template=template,
+        kval=kval,
+        spin=_spin_map[spin],
+        dry_run=dry_run,
+    )
+    gen.run()
 
 
 if __name__ == '__main__':

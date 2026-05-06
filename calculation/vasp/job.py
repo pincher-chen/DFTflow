@@ -195,10 +195,11 @@ class VaspRunningJob:
         if not self._potcar.exists():
             potcar_lib = CONDOR.get("VASP", "PSEUDO_POTENTIAL_DIR")
             potcar_lib = SPath(potcar_lib)
+            #print(potcar_lib)
             if not potcar_lib.exists():
                 raise FileNotFoundError("POTCAR Source not found!")
             POTCAR(lib=potcar_lib).cat(stru, self._potcar)
-
+        #print(POTCAR)
         self._running.write_text(data=f"{1}")
         self._write_kpt(stru, self.kpara[0])
 

@@ -18,11 +18,15 @@ class LogCsv:
     def _read(self):
         self._csv = None
         if self._path.exists():
-            self._csv = pandas.read_csv(self._path, sep="\t")
+            try:
+                self._csv = pandas.read_csv(self._path, sep="\t")
+            except:
+                self._csv = None
 
     @property
     def csv(self):
         self._read()
+        print(self._csv)
         return self._csv
 
     @csv.setter
@@ -37,7 +41,10 @@ class LogCsv:
         return repr(self.csv)
 
     def apply_(self, df: pandas.DataFrame):
-        return df.to_csv(self._path, sep="\t", na_rep="?", index=False)
+        if df is not None:
+            return df.to_csv(self._path, sep="\t", na_rep="?", index=False)
+        else:
+            print("df is None")
 
     def apply(self):
         self.apply_(self.csv)
@@ -71,11 +78,15 @@ class LogCsv:
         return df
 
     def alter_many(self, match_lb, match_val, values):
-        tmp = self.csv.copy()
-        for k, v in values.items():
-            tmp = self.__alter(tmp, match_lb, match_val, k, v)
-        self.csv = tmp
-        return tmp
+        if self.csv is not None and hasattr(self.csv, 'copy'):
+            print(self)
+            tmp = self.csv.copy()
+            for k, v in values.items():
+                tmp = self.__alter(tmp, match_lb, match_val, k, v)
+            self.csv = tmp
+            return tmp
+        else:
+            print("self.csv is None, cannot perform copy operation")
 
     def drop_one(self, label, value, **kwargs):
         tmp = self.csv.copy()
@@ -98,7 +109,7 @@ class LogCsv:
             dict(zip(head, values[0]))
         )
         for idx in range(1, nov):
-            tmp = tmp.append(
+            tmp = tmp._append(
                 dataframe_from_dict(
                     dict(zip(head, values[idx]))), ignore_index=True
             )

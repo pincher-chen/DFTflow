@@ -100,6 +100,7 @@ class KPOINTS:
         if mesh == 0:
             self.style = KPOINTS.mode.Gamma
             self.kmesh = [1, 1, 1]
+            return 
         ratio = list(
             map(lambda x: int(
                 np.floor(round(x / (2 * np.pi * mesh)))),

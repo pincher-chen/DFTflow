@@ -252,7 +252,7 @@ class TianHeWorker:
             dict(zip(YHI_LABEL,
                      ["USER", self.alloc, self._used, None, None]))
         )
-        all_yhi = sys_yhi.append(user_yhi, ignore_index=True)
+        all_yhi = sys_yhi._append(user_yhi, ignore_index=True)
         RUNNING_JOB_LOG.apply_(user_yhq)
         HPC_LOG.apply_(all_yhi)
 

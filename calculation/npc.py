@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import threading
+import os
 from time import sleep
 from multiprocessing.pool import Pool
 
@@ -33,10 +34,21 @@ class Producer(threading.Thread):
             raise FileNotFoundError("No structure files found!")
              
         for index, job in ALL_JOB_LOG.csv.iterrows():
+            files = os.listdir(job["WORKDIR"])
+            #out_files = [file for file in files if file.endswith('.out')]
+            #if len(out_files) > 3:
+                #print("more than 3 .out files")
+            #else:
+                #print(job["WORKDIR"])
+                #dft_job = TianHeJob(job_stat=job["RESULT"], job_path=job["WORKDIR"],
+                                #partition=CONDOR.get("ALLOW", "PARTITION"),
+                                #node=max_needed_node, core=max_needed_core, name=job["NAME"])
+                #self.queue.put(dft_job)
             dft_job = TianHeJob(job_stat=job["RESULT"], job_path=job["WORKDIR"],
                                 partition=CONDOR.get("ALLOW", "PARTITION"),
                                 node=max_needed_node, core=max_needed_core, name=job["NAME"])
             self.queue.put(dft_job)
+            print("npc: "+job["WORKDIR"])
         self.queue.put(self.Finished)
 
 
@@ -72,9 +84,16 @@ class Submitter(threading.Thread):
                 self.worker.used_node += job.node
             else:
                 info.update({"ST": "SF"})
-            tmp = ALL_JOB_LOG.alter_many("WORKDIR", job.path, info)
-            ALL_JOB_LOG.apply_(tmp)
-            sleep(self.stime)
+                #self.worker.idle_node -= job.node
+                #self.worker.used_node += job.node
+            if ALL_JOB_LOG is not None:
+                #tmp = ALL_JOB_LOG.alter_many("WORKDIR", job.path, info)
+                #print("npc91: "+job.path)
+                #print(ALL_JOB_LOG)
+                #ALL_JOB_LOG.apply_(tmp)
+                sleep(self.stime)
+            else:
+                print("this is NoneType")
 
 
 class Npc:
@@ -98,6 +117,7 @@ class Npc:
 
     @staticmethod
     def _make_log(job_dirs):
+        print(job_dirs)
         jobs = []
         for job in job_dirs:
             root, bash_name = job.get()

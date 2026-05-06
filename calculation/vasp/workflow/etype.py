@@ -124,6 +124,11 @@ class ErrType:
             try:
                 matched = self._match(log)
                 if matched is not None:
+                    #import os
+                    #if not os.path.exists(self.running_root'/error'):
+                    #print(matched)
+                    #with open(self.running_root / "error",'a') as f:
+                    #    pass
                     yield matched
             except FileNotFoundError:
                 continue
@@ -241,6 +246,11 @@ class ErrType:
                 el = True
                 for err_type, err_code in xl:
                     self.reaction(err_type, err_code)
+                    break
+            if el:
+                with open(self.running_root / "error",'a') as f:
+                    pass
+                break
         if not el:
             print("[...]error not found, update POSCAR if CONTCAR is not empty...")
             self.contcar2poscar()

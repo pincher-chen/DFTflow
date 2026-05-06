@@ -110,6 +110,9 @@ class POTCAR:
         self.lib = lib
 
     def _cat_by(self, pel, des):
+        #print("potcar_gen",f"{self.lib / pel / 'POTCAR'}")
+        #print("potcar_gen",f"{des}")
+        print("potcar_gen",f"{ pel}")
         return get_output(
             f"cat {self.lib / pel / 'POTCAR'} >> {des}"
         )
