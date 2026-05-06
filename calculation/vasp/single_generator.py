@@ -69,24 +69,86 @@ def _read_magmoms_from_cif(cif_path):
         with open(str(cif_path), 'r') as f:
             lines = f.read().splitlines()
 
-        # 1. 解析 atom_site loop，获取原子标签顺序
-        atom_labels = []
+        # 1. 解析 atom_site loop，获取 (label, occupancy) 列表
+        #    保留占位率用于后续过滤混占副标签
+        atom_site_rows = []   # [(label, occupancy), ...]
         i = 0
         while i < len(lines):
             s = lines[i].strip()
             if s == 'loop_':
                 headers, rows, next_i = _parse_loop(lines, i + 1)
-                _atom_label_key = next(
-                    (h for h in headers if h.replace('.', '_') == '_atom_site_label'), None
-                )
-                if _atom_label_key:
-                    label_col = headers.index(_atom_label_key)
+                hn = [h.replace('.', '_') for h in headers]
+                _label_key = next((h for h in hn if h == '_atom_site_label'), None)
+                if _label_key:
+                    label_col = hn.index(_label_key)
+                    # 尝试读占位率列
+                    occ_key = next(
+                        (h for h in hn if 'occupancy' in h or '_atom_site_occupancy' == h),
+                        None
+                    )
+                    occ_col = hn.index(occ_key) if occ_key else None
                     for r in rows:
                         if label_col < len(r):
-                            atom_labels.append(r[label_col])
+                            lab = r[label_col]
+                            try:
+                                occ = _cif_float(r[occ_col]) if occ_col is not None else 1.0
+                            except Exception:
+                                occ = 1.0
+                            atom_site_rows.append((lab, occ))
                 i = next_i
             else:
                 i += 1
+
+        # ── 混占位过滤 ──────────────────────────────────────────────────────
+        # 同一位置上多个标签共享（部分占位），只保留每组中占位率最高的标签。
+        # 判断依据：对每个 (fractional_x, fractional_y, fractional_z) 坐标，
+        # 取 occupancy 最大的那个标签作为"主标签"。
+        # 若 atom_site 没有坐标列，则退化为：相同元素符号+相近编号的标签只取一个。
+        #
+        # 简洁实现：坐标不方便在此直接获取，因此用"按位置去重"的策略：
+        # 先解析一遍带坐标的 atom_site，建立 (frac_x,frac_y,frac_z) → (label, occ) 映射。
+        atom_site_coord_rows = []   # [(label, occ, x, y, z), ...]
+        i = 0
+        while i < len(lines):
+            s = lines[i].strip()
+            if s == 'loop_':
+                headers, rows, next_i = _parse_loop(lines, i + 1)
+                hn = [h.replace('.', '_') for h in headers]
+                lk  = next((h for h in hn if h == '_atom_site_label'), None)
+                xk  = next((h for h in hn if h in ('_atom_site_fract_x', '_atom_site_fract_x')), None)
+                yk  = next((h for h in hn if h in ('_atom_site_fract_y',)), None)
+                zk  = next((h for h in hn if h in ('_atom_site_fract_z',)), None)
+                ok  = next((h for h in hn if 'occupancy' in h), None)
+                if lk and xk and yk and zk:
+                    li, xi, yi, zi = hn.index(lk), hn.index(xk), hn.index(yk), hn.index(zk)
+                    oi = hn.index(ok) if ok else None
+                    for r in rows:
+                        try:
+                            lab = r[li]
+                            x, y, z = _cif_float(r[xi]), _cif_float(r[yi]), _cif_float(r[zi])
+                            occ = _cif_float(r[oi]) if oi is not None else 1.0
+                            atom_site_coord_rows.append((lab, occ, x, y, z))
+                        except Exception:
+                            pass
+                i = next_i
+            else:
+                i += 1
+
+        # 将同一坐标位置（精度 1e-3）的标签聚合，保留占位率最大者为"主标签"
+        primary_labels = set()
+        if atom_site_coord_rows:
+            site_map = {}  # (ix,iy,iz) → (label, occ)
+            for lab, occ, x, y, z in atom_site_coord_rows:
+                key = (round(x, 3), round(y, 3), round(z, 3))
+                if key not in site_map or occ > site_map[key][1]:
+                    site_map[key] = (lab, occ)
+            primary_labels = {v[0] for v in site_map.values()}
+
+        # 2. 只保留主标签的 atom_labels（用于后续展开）
+        if primary_labels:
+            atom_labels = [lab for lab, occ in atom_site_rows if lab in primary_labels]
+        else:
+            atom_labels = [lab for lab, occ in atom_site_rows]
 
         # 2. 解析 moment loop：label -> (mx, my, mz)
         moment_map = {}
@@ -121,14 +183,36 @@ def _read_magmoms_from_cif(cif_path):
         if not moment_map:
             return None
 
-        # 3. 按 atom_labels 顺序展开
-        if atom_labels:
+        # 3. 按过滤后的 atom_labels 顺序展开
+        #    若某主标签不在 moment_map，尝试用同一位置的副标签磁矩补全
+        if primary_labels and atom_site_coord_rows:
+            # 建立 主标签 → 同坐标所有标签 的映射，用于回退查找
+            coord_to_all = {}
+            for lab, occ, x, y, z in atom_site_coord_rows:
+                key = (round(x, 3), round(y, 3), round(z, 3))
+                coord_to_all.setdefault(key, []).append(lab)
+            lab_to_coord = {
+                lab: (round(x, 3), round(y, 3), round(z, 3))
+                for lab, occ, x, y, z in atom_site_coord_rows
+            }
+
+            def _get_moment(lab):
+                if lab in moment_map:
+                    return list(moment_map[lab])
+                # 回退：同位置的其他标签有磁矩？
+                coord = lab_to_coord.get(lab)
+                if coord:
+                    for sibling in coord_to_all.get(coord, []):
+                        if sibling in moment_map:
+                            return list(moment_map[sibling])
+                return [0.0, 0.0, 0.0]
+
+            magmoms_vec = [_get_moment(lab) for lab in atom_labels]
+        else:
             magmoms_vec = [
                 list(moment_map[lab]) if lab in moment_map else [0.0, 0.0, 0.0]
                 for lab in atom_labels
             ]
-        else:
-            magmoms_vec = [list(v) for v in moment_map.values()]
 
         # 共线判断（全部磁矩的 x/y 分量近零）
         if all(abs(m[0]) < 1e-6 and abs(m[1]) < 1e-6 for m in magmoms_vec):
@@ -138,6 +222,51 @@ def _read_magmoms_from_cif(cif_path):
     except Exception as e:
         print(f"[WARNING] Failed to read magnetic moments from CIF: {e}")
         return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CIF 预检：检测 ASE mcif 读取可能导致内存爆炸的危险特征
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cif_preflight(cif_path: Path):
+    """
+    快速扫描 CIF/mcif 文件，检测已知会导致 ASE 对称展开爆炸的特征：
+
+    1. 多 k 矢量（2k/3k 磁结构）：ASE 会尝试构造容纳所有 k 的超胞
+    2. 反平移对称（anti-centering，centering 操作含 ,+1 与 ,-1 同时出现）：
+       ASE 会再次翻倍晶胞以容纳磁矩反向位点
+
+    这两类特征会使原子数指数增长，导致 [Errno 12] Cannot allocate memory
+    并最终引发 C 层 segfault（无法被 Python 的 try/except 捕获）。
+
+    返回 (safe: bool, reason: str)
+      safe=True  → 可以用 format="mcif" 安全读取
+      safe=False → 应改用 format="cif" 只读晶体结构，磁矩另行解析
+    """
+    try:
+        content = cif_path.read_text(errors='replace')
+
+        # 1. 多 k 矢量：_parent_propagation_vector loop 中有 2 行以上 k 数据
+        kvec_lines = re.findall(
+            r'^\s*k\d+\s+\[', content, re.MULTILINE
+        )
+        if len(kvec_lines) > 1:
+            return False, f"多 k 矢量磁结构（{len(kvec_lines)}k）"
+
+        # 2. 反平移对称：centering 操作中同时出现 ,+1 和 ,-1
+        centering_block = re.search(
+            r'_space_group_symop_magn_centering\.xyz(.*?)(?=loop_|\Z)',
+            content, re.DOTALL
+        )
+        if centering_block:
+            ops = centering_block.group(1)
+            if re.search(r',\s*-1', ops) and re.search(r',\s*\+?1\b', ops):
+                return False, "含反平移对称（anti-centering，,-1）"
+
+    except Exception:
+        pass
+
+    return True, ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -151,6 +280,9 @@ def _read_structure(cif_path: Path):
     磁矩优先从 _atom_site_moment 字段读取（MAGNDATA mcif 格式），
     ASE 读不到时全零填充。
 
+    对多 k / 反平移等危险 CIF，跳过 mcif 展开，改用 cif 格式只读晶体结构，
+    避免 ASE 对称展开导致内存溢出与 segfault。
+
     magmoms_3d : ndarray, shape (N, 3)
     """
     from ase.io import read
@@ -158,14 +290,26 @@ def _read_structure(cif_path: Path):
     import io
     import warnings
 
+    # ── 预检：检测危险 CIF 特征 ──────────────────────────────────────────────
+    safe, reason = _cif_preflight(cif_path)
+    if not safe:
+        print(f"  [INFO] {cif_path.stem}: {reason}，跳过 mcif 对称展开，改用 cif 格式读取晶体结构")
+
     # 读结构（抑制 CIF v2.0 和 token 警告）
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        # 优先尝试 mcif 格式（保留更多磁性信息）
-        try:
-            atoms = read(str(cif_path), format="mcif")
-        except Exception:
-            atoms = read(str(cif_path), format="cif")
+        # 危险 CIF 直接用 cif 格式（只读晶体结构，跳过磁对称展开）
+        # 安全 CIF 优先尝试 mcif（保留更多磁性信息）
+        if not safe:
+            try:
+                atoms = read(str(cif_path), format="cif")
+            except Exception as e:
+                raise RuntimeError(f"cif 格式读取失败: {e}") from e
+        else:
+            try:
+                atoms = read(str(cif_path), format="mcif")
+            except Exception:
+                atoms = read(str(cif_path), format="cif")
 
     # 写成 VASP POSCAR，再用 dftflow POSCAR 解析（保持 dftflow 内部一致性）
     buf = io.StringIO()
@@ -191,6 +335,20 @@ def _read_structure(cif_path: Path):
             magmoms_3d_crys = np.column_stack([np.zeros(natoms), np.zeros(natoms), raw])
         else:
             magmoms_3d_crys = raw  # shape (N, 3)，晶轴坐标分量
+
+        # ── 长度对齐：CIF atom_site 条目数可能与 ASE 解析的原子数不一致
+        # 典型场景：混占位（如 Fe/Mo 共占同一位置）在 mcif 中被展开为两条
+        # atom_site 记录，但 ASE 合并为一个原子。此时 CIF 侧条目数 > natoms，
+        # 需截断到 natoms；反之若 CIF 条目较少，则补零。
+        n_cif = len(magmoms_3d_crys)
+        if n_cif != natoms:
+            print(f"  [INFO] CIF atom_site 条目数({n_cif}) ≠ ASE 原子数({natoms})，"
+                  f"可能存在混占位合并，磁矩将{'截断' if n_cif > natoms else '补零'}至 {natoms} 个原子。")
+            if n_cif > natoms:
+                magmoms_3d_crys = magmoms_3d_crys[:natoms]
+            else:
+                pad = np.zeros((natoms - n_cif, 3))
+                magmoms_3d_crys = np.vstack([magmoms_3d_crys, pad])
 
         # ── crystal axes → Cartesian 坐标变换 ─────────────────────────────
         # mcif 的 crystalaxis_x/y/z 是沿晶轴**单位向量**方向的分量（μB）
